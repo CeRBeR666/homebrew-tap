@@ -1,0 +1,110 @@
+name: Publish APT Repository
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Published Vulken tag (for example v1.0.2)"
+        required: true
+        default: "v1.0.2"
+  repository_dispatch:
+    types: [apt-release]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: apt-pages
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build signed APT repository and deploy Pages
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Checkout public tap
+        uses: actions/checkout@v4
+
+      - name: Set up GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Install APT repository tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev apt-utils gnupg
+
+      - name: Generate signed APT metadata
+        env:
+          RELEASE_TAG: ${{ github.event.client_payload.tag || inputs.tag }}
+          APT_GPG_PRIVATE_KEY_B64: ${{ secrets.APT_GPG_PRIVATE_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release tag must be vMAJOR.MINOR.PATCH"
+            exit 1
+          fi
+          if [[ -z "${APT_GPG_PRIVATE_KEY_B64:-}" ]]; then
+            echo "::error::Set the APT_GPG_PRIVATE_KEY_B64 Actions secret in homebrew-tap before publishing."
+            exit 1
+          fi
+
+          VERSION="${RELEASE_TAG#v}"
+          PACKAGE="vulken_${VERSION}_amd64.deb"
+          mkdir -p site/pool/main/v/vulken site/dists/stable/main/binary-amd64
+
+          curl --fail --location --retry 3 \
+            "https://github.com/CeRBeR666/homebrew-tap/releases/download/${RELEASE_TAG}/${PACKAGE}" \
+            --output "site/pool/main/v/vulken/${PACKAGE}"
+          dpkg-deb --field "site/pool/main/v/vulken/${PACKAGE}" Package Version Architecture
+          test "$(dpkg-deb --field "site/pool/main/v/vulken/${PACKAGE}" Package)" = "vulken"
+          test "$(dpkg-deb --field "site/pool/main/v/vulken/${PACKAGE}" Version)" = "$VERSION"
+          test "$(dpkg-deb --field "site/pool/main/v/vulken/${PACKAGE}" Architecture)" = "amd64"
+
+          cd site
+          dpkg-scanpackages pool /dev/null > dists/stable/main/binary-amd64/Packages
+          gzip -n -9 -c dists/stable/main/binary-amd64/Packages > dists/stable/main/binary-amd64/Packages.gz
+
+          apt-ftparchive \
+            -o APT::FTPArchive::Release::Origin="CeRBETA" \
+            -o APT::FTPArchive::Release::Label="CeRBETA Vulken" \
+            -o APT::FTPArchive::Release::Suite="stable" \
+            -o APT::FTPArchive::Release::Codename="stable" \
+            -o APT::FTPArchive::Release::Architectures="amd64" \
+            -o APT::FTPArchive::Release::Components="main" \
+            release dists/stable > dists/stable/Release
+
+          echo "$APT_GPG_PRIVATE_KEY_B64" | base64 --decode > "$RUNNER_TEMP/apt-private-key.asc"
+          chmod 600 "$RUNNER_TEMP/apt-private-key.asc"
+          GNUPGHOME="$RUNNER_TEMP/gnupg"
+          export GNUPGHOME
+          mkdir -p "$GNUPGHOME"
+          chmod 700 "$GNUPGHOME"
+          gpg --batch --import "$RUNNER_TEMP/apt-private-key.asc"
+          KEY_FINGERPRINT="$(gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "fpr" {print $10; exit}')"
+          test -n "$KEY_FINGERPRINT"
+          gpg --batch --yes --export "$KEY_FINGERPRINT" > vulken-archive-keyring.gpg
+          gpg --batch --yes --armor --export "$KEY_FINGERPRINT" > vulken-archive-key.asc
+          gpg --batch --yes --pinentry-mode loopback --clearsign \
+            -o dists/stable/InRelease dists/stable/Release
+          gpg --batch --yes --pinentry-mode loopback --armor --detach-sign \
+            -o dists/stable/Release.gpg dists/stable/Release
+          gpg --batch --verify dists/stable/InRelease
+          printf 'CeRBETA Vulken APT Repository - %s\n' "$VERSION" > index.html
+          touch .nojekyll
+          rm -f "$RUNNER_TEMP/apt-private-key.asc"
+          echo "APT metadata signed and ready for Pages deployment."
+
+      - name: Upload repository to Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Deploy signed repository
+        id: deployment
+        uses: actions/deploy-pages@v4
