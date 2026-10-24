@@ -1,6 +1,6 @@
 cask "vulken" do
-  version "1.0.5"
-  sha256 "9cd1e7a43162253e68256279ab6e66a85d016f951273b32bcfeabcb4789c7617"
+  version "1.0.6"
+  sha256 "b9a8bbed98d7120faff2921ba94d2ac290d4c13a2ef88b04d8202bfd0063b3bd"
 
   url "https://github.com/CeRBeR666/homebrew-tap/releases/download/v#{version}/Vulken-#{version}-macos-universal-UNSIGNED.zip"
   name "Vulken"
