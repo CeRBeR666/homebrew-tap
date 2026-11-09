@@ -55,27 +55,30 @@ jobs:
           fi
 
           VERSION="${RELEASE_TAG#v}"
-          PACKAGE="vulken_${VERSION}_amd64.deb"
-          mkdir -p site/pool/main/v/vulken site/dists/stable/main/binary-amd64
-
-          curl --fail --location --retry 3 \
-            "https://github.com/CeRBeR666/homebrew-tap/releases/download/${RELEASE_TAG}/${PACKAGE}" \
-            --output "site/pool/main/v/vulken/${PACKAGE}"
-          dpkg-deb --field "site/pool/main/v/vulken/${PACKAGE}" Package Version Architecture
-          test "$(dpkg-deb --field "site/pool/main/v/vulken/${PACKAGE}" Package)" = "vulken"
-          test "$(dpkg-deb --field "site/pool/main/v/vulken/${PACKAGE}" Version)" = "$VERSION"
-          test "$(dpkg-deb --field "site/pool/main/v/vulken/${PACKAGE}" Architecture)" = "amd64"
+          mkdir -p site/pool/main/v/vulken
+          for ARCH in amd64 arm64; do
+            PACKAGE="vulken_${VERSION}_${ARCH}.deb"
+            mkdir -p "site/dists/stable/main/binary-${ARCH}"
+            curl --fail --location --retry 3 \
+              "https://github.com/CeRBeR666/homebrew-tap/releases/download/${RELEASE_TAG}/${PACKAGE}" \
+              --output "site/pool/main/v/vulken/${PACKAGE}"
+            test "$(dpkg-deb --field "site/pool/main/v/vulken/${PACKAGE}" Package)" = "vulken"
+            test "$(dpkg-deb --field "site/pool/main/v/vulken/${PACKAGE}" Version)" = "$VERSION"
+            test "$(dpkg-deb --field "site/pool/main/v/vulken/${PACKAGE}" Architecture)" = "$ARCH"
+          done
 
           cd site
-          dpkg-scanpackages pool /dev/null > dists/stable/main/binary-amd64/Packages
-          gzip -n -9 -c dists/stable/main/binary-amd64/Packages > dists/stable/main/binary-amd64/Packages.gz
+          for ARCH in amd64 arm64; do
+            dpkg-scanpackages --arch "$ARCH" pool /dev/null > "dists/stable/main/binary-${ARCH}/Packages"
+            gzip -n -9 -c "dists/stable/main/binary-${ARCH}/Packages" > "dists/stable/main/binary-${ARCH}/Packages.gz"
+          done
 
           apt-ftparchive \
             -o APT::FTPArchive::Release::Origin="CeRBETA" \
             -o APT::FTPArchive::Release::Label="CeRBETA Vulken" \
             -o APT::FTPArchive::Release::Suite="stable" \
             -o APT::FTPArchive::Release::Codename="stable" \
-            -o APT::FTPArchive::Release::Architectures="amd64" \
+            -o APT::FTPArchive::Release::Architectures="amd64 arm64" \
             -o APT::FTPArchive::Release::Components="main" \
             release dists/stable > dists/stable/Release
 
